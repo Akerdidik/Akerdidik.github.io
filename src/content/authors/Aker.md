@@ -6,5 +6,4 @@ bio: 'pop rdi'
 website: 'https://akerdidik.github.io'
 twitter: 'https://twitter.com/akerfr13nds'
 github: 'https://github.com/Akerdidik'
-mail: 'johndoe@johndoe.johndoe'
 ---
