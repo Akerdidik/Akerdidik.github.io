@@ -26,24 +26,24 @@ Old trick
 There is provided binary `old_rs` , `libc.so.6` and `ld-2.39.so` files.
 
 There is also provided meme.mp4 file inside of it there is fast phrase of: "Старый вокзалго мнау" meaning Old Railway Station :) (this is local meme created randomly, just rofl sound quality which makes laugh):
-![](https://github.com/Akerdidik/Akerdidik.github.io/blob/main/src/content/blog/itfest-ctf-2025-writeups/meme.mp4)
+![](https://raw.githubusercontent.com/Akerdidik/Akerdidik.github.io/refs/heads/main/src/content/blog/itfest-ctf-2025-writeups/meme.mp4)
 
 We can investigate `old_rs` by firstly using `checksec` to reveal security applied to this binary, also old_rs binary is stripped.
 
 And to check the version of libc provided, we can see the `ld-2.39.so` file giving us the according version, or we can check it by: `strings libc.so.6 | grep GLIBC` and identify it as GLIBC 2.39
 
 checksec:
-![](https://github.com/Akerdidik/Akerdidik.github.io/blob/main/src/content/blog/itfest-ctf-2025-writeups/checksec.png)
+![](https://raw.githubusercontent.com/Akerdidik/Akerdidik.github.io/refs/heads/main/src/content/blog/itfest-ctf-2025-writeups/checksec.png)
 
 GLIBC version:
-![](https://github.com/Akerdidik/Akerdidik.github.io/blob/main/src/content/blog/itfest-ctf-2025-writeups/glibc_version.png)
+![](https://raw.githubusercontent.com/Akerdidik/Akerdidik.github.io/refs/heads/main/src/content/blog/itfest-ctf-2025-writeups/glibc_version.png)
 
 So the binary is compiled with Full RELRO , Canary and NX enabled , No PIE
 
 Meaning the GOT and PLT sections are Read Only, and the binary contains canary check every stack frame it leaves and the stack is not executable, but binary do not have PIE enabled, which gives us constant known addresses of the binary itself.
 
 Lets investigate further by executing and checking what program does:
-![](https://github.com/Akerdidik/Akerdidik.github.io/blob/main/src/content/blog/itfest-ctf-2025-writeups/binary_functions_execute.png)
+![](https://raw.githubusercontent.com/Akerdidik/Akerdidik.github.io/refs/heads/main/src/content/blog/itfest-ctf-2025-writeups/binary_functions_execute.png)
 
 Binary prints the menu containing options:
 ```
@@ -70,7 +70,7 @@ Since I am a challenge author, I have the source code of the binary, but source 
 There can be used any reverse engineering tools you prefer. For this task I will use [Binary Ninja](https://binary.ninja) as decompilation tool and [pwndbg](https://github.com/pwndbg/pwndbg) for debugging.
 
 Lets check what functions we have in the binary using Binary Ninja:
-![](https://github.com/Akerdidik/Akerdidik.github.io/blob/main/src/content/blog/itfest-ctf-2025-writeups/functions_bninja.png)
+![](https://raw.githubusercontent.com/Akerdidik/Akerdidik.github.io/refs/heads/main/src/content/blog/itfest-ctf-2025-writeups/functions_bninja.png)
 
 Based on the main() function there is loop which prints the menu every iteration, then prompts input using scanf for integer, using that output it matches the calls for corresponding functions. Loop ends when we exceed the `i` variable which responds to the counter of the executed options in the program, meaning each option usage increments it until it reaches 0xd then loop ends.
 
@@ -79,9 +79,9 @@ This part is optional, but I will rename the functions that was stripped to the 
 The function `sub_401276` appears to be menu option which simply prints menu we saw earlier, so lets change it to that. `sub_4012ef` is function which is called when we choose option '1' so lets change it to `create_ticket`. Then there is `sub_4013d7` , `sub_4014e7` , `sub_4015ff` , `sub_401740` which is corresponding '2' , '3' , '4' , '5'. Lets change them into `edit_ticket` , `read_ticket` , `cancel_ticket` , `exit_prog`.
 
 Lets check what each functions do under the hood:
-![](https://github.com/Akerdidik/Akerdidik.github.io/blob/main/src/content/blog/itfest-ctf-2025-writeups/create_edit_ticket.png)
-![](https://github.com/Akerdidik/Akerdidik.github.io/blob/main/src/content/blog/itfest-ctf-2025-writeups/read_ticket.png)
-![](https://github.com/Akerdidik/Akerdidik.github.io/blob/main/src/content/blog/itfest-ctf-2025-writeups/cancel_exit.png)
+![](https://raw.githubusercontent.com/Akerdidik/Akerdidik.github.io/refs/heads/main/src/content/blog/itfest-ctf-2025-writeups/create_edit_ticket.png)
+![](https://raw.githubusercontent.com/Akerdidik/Akerdidik.github.io/refs/heads/main/src/content/blog/itfest-ctf-2025-writeups/read_ticket.png)
+![](https://raw.githubusercontent.com/Akerdidik/Akerdidik.github.io/refs/heads/main/src/content/blog/itfest-ctf-2025-writeups/cancel_exit.png)
 
 The `create_ticket` is eventually doing this:
 1. Checks some global variable (lets rename it to max_tickets) for not exceeding 2, if it is then returns with print of tickets is overbooked
