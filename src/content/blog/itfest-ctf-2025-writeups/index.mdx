@@ -1,6 +1,6 @@
 ---
 title: 'ITFEST CTF 2025 PWN Writeups'
-description: 'PWN writeups on my challenges in the ITFEST CTF 2025'
+description: 'Writeups on my PWN challenges in the ITFEST CTF 2025'
 date: 2025-12-12
 tags: ['itfest-ctf-2025', 'pwn', 'safe-unlinking', 'heap-exploitation', 'TOCTOU', 'race-condition', 'kernel-exploitation']
 authors: ['Aker']
@@ -8,38 +8,60 @@ draft: false
 ---
 >ITFEST CTF 2025 is a one-day online/offline and jeopardy/scada style competition hosted by FR13NDS TEAM.
 
-
-
-
-
-
 # Table of contents
-
 
 - Old Railway Station
 - MAX MAX
 
-
-
 # 1. Old Railway Station
 
-
-
-## description
+## Description
 
 Old trick
 
+## Solution
 
+### Initial checks
 
-## solution
+There is provided binary `old_rs` , `libc.so.6` and `ld-2.39.so` files.
+
+We can investigate `old_rs` by firstly using `checkse`c to reveal security applied to this binary, and to check the version of libc provided we can see the `ld-2.39.so` file giving us the according version, or we can check it by: `strings libc.so.6 | grep GLIBC` and identify it as GLIBC 2.39
+
+checksec:
+![](https://github.com/Akerdidik/Akerdidik.github.io/src/context/blog/itfest-ctf-2025-writeups/checksec.png)
+
+GLIBC version:
+![](https://github.com/Akerdidik/Akerdidik.github.io/src/context/blog/itfest-ctf-2025-writeups/glibc_version.png)
+
+So the binary is compiled with Full RELRO , Canary and NX enabled , No PIE
+Meaning the GOT and PLT sections are Read Only, and the binary contains canary check every stack frame it leaves and the stack is not executable, but binary do not have PIE enabled, which gives us constant known addresses of the binary itself.
+
+Lets investigate further by executing and checking what program does:
+![](https://github.com/Akerdidik/Akerdidik.github.io/src/context/blog/itfest-ctf-2025-writeups/binary_functions_execute.png)
+
+Binary print the menu containing options:
+```
+  1. Issue New Ticket
+  2. Modify Ticket Details
+  3. Review Ticket Information
+  4. Cancel Ticket
+  5. Close Station for the Day
+```
+
+By the usage of each functions it seems for doing:
+1. Creates ticket and prints the index of created ticket
+2. We can modify ticket by index with our data
+3. Prints data within the ticket by index
+4. Refunds (Cancels) the ticket by index
+5. Exits from program
+
+It is still not clear what it does actually when calling this options, specially the 1, 2, 3 and 4. So lets dive into reversing part, to analyze binary statically and dynamically.
 
 ### Reverse
 
-There is provided binary 'old_rs' and libc file
-We can investigate the file firstly using checksec to reveal security applied to this binary, and check the version of libc by: `strings libc.so.6 | grep GLIBC` and identify it as GLIBC 2.39
 
 
-## flag
+## Flag
 
 `f13{}`
 
@@ -49,10 +71,9 @@ We can investigate the file firstly using checksec to reveal security applied to
 - Learning point 2
 - Learning point 3
 
-## references
+## References
 
 - [Unsafe Unlink](https://github.com/shellphish/how2heap/blob/master/glibc_2.39/unsafe_unlink.c)
-
 
 
 # 2. MAX MAX
@@ -70,5 +91,4 @@ TU TU TU TUTU
 `f13{}`
 
 ## references
-
 
