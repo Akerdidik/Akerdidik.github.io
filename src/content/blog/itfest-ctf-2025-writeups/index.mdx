@@ -33,6 +33,10 @@ Old trick
 
 ## solution
 
+### Reverse
+
+There is provided binary 'old_rs' and libc file
+We can investigate the file firstly using checksec to reveal security applied to this binary, and check the version of libc by: `strings libc.so.6 | grep GLIBC` and identify it as GLIBC 2.39
 
 
 ## flag
@@ -66,3 +70,5 @@ TU TU TU TUTU
 `f13{}`
 
 ## references
+
+
