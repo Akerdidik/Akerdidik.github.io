@@ -414,9 +414,6 @@ There is provided `vmlinux` binary of kernel, and `bzImage` with `initramfs.cpio
 After extracting the initramfs using `cpio` utility we can see the files `init` `flag` and `maxmax_driver.ko` - which seems to be compiled driver file of the source code which we have in the file `maxmax_driver.c`
 
 Now we can read the source code of the kernel driver:
-![](driver_src.png)
-![](driver_src_2.png)
-
 ```c
 #include <linux/module.h>
 #include <linux/kernel.h>
