@@ -1,5 +1,5 @@
 ---
-name: 'Aker'
+name: 'aker'
 pronouns: 'he/him'
 avatar: 'https://avatars.githubusercontent.com/u/93317207?s=400&v=4'
 bio: 'pop rdi'
