@@ -25,7 +25,12 @@ Old trick
 
 There is provided binary `old_rs` , `libc.so.6` and `ld-2.39.so` files.
 
-We can investigate `old_rs` by firstly using `checkse`c to reveal security applied to this binary, and to check the version of libc provided we can see the `ld-2.39.so` file giving us the according version, or we can check it by: `strings libc.so.6 | grep GLIBC` and identify it as GLIBC 2.39
+There is also provided meme.mp4 file inside of it there is fast phrase of: "Старый вокзалго мнау" meaning Old Railway Station :) (this is local meme created randomly, just rofl sound quality which makes laugh):
+![](https://github.com/Akerdidik/Akerdidik.github.io/src/context/blog/itfest-ctf-2025-writeups/meme.mp4)
+
+We can investigate `old_rs` by firstly using `checksec` to reveal security applied to this binary, also old_rs binary is stripped.
+
+And to check the version of libc provided, we can see the `ld-2.39.so` file giving us the according version, or we can check it by: `strings libc.so.6 | grep GLIBC` and identify it as GLIBC 2.39
 
 checksec:
 ![](https://github.com/Akerdidik/Akerdidik.github.io/src/context/blog/itfest-ctf-2025-writeups/checksec.png)
@@ -34,12 +39,13 @@ GLIBC version:
 ![](https://github.com/Akerdidik/Akerdidik.github.io/src/context/blog/itfest-ctf-2025-writeups/glibc_version.png)
 
 So the binary is compiled with Full RELRO , Canary and NX enabled , No PIE
+
 Meaning the GOT and PLT sections are Read Only, and the binary contains canary check every stack frame it leaves and the stack is not executable, but binary do not have PIE enabled, which gives us constant known addresses of the binary itself.
 
 Lets investigate further by executing and checking what program does:
 ![](https://github.com/Akerdidik/Akerdidik.github.io/src/context/blog/itfest-ctf-2025-writeups/binary_functions_execute.png)
 
-Binary print the menu containing options:
+Binary prints the menu containing options:
 ```
   1. Issue New Ticket
   2. Modify Ticket Details
@@ -58,6 +64,13 @@ By the usage of each functions it seems for doing:
 It is still not clear what it does actually when calling this options, specially the 1, 2, 3 and 4. So lets dive into reversing part, to analyze binary statically and dynamically.
 
 ### Reverse
+
+Since I am a challenge author, I have the source code of the binary, but source code was not provided in the original task, so to be fair I will use original stripped binary as it is and reverse it.
+
+There can be used any reverse engineering tools you prefer. For this task I will use [Binary Ninja](https://binary.ninja) as decompilation tool and [pwndbg](https://github.com/pwndbg/pwndbg) for debugging.
+
+Lets check what functions we have in the binary using Binary Ninja:
+![](https://github.com/Akerdidik/Akerdidik.github.io/src/context/blog/itfest-ctf-2025-writeups/functions_bninja.png)
 
 
 
