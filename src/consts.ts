@@ -3,7 +3,7 @@ import type { IconMap, SocialLink, Site } from '@/types'
 export const SITE: Site = {
   title: 'Aker',
   description:
-    'Blog about PWN in the CTFs and Cybersecurity',
+    'Blog about PWN in the CTFs and Cybersecurity in my perspective',
   href: 'https://akerdidik.github.io',
   author: 'Aker',
   locale: 'en-US',
