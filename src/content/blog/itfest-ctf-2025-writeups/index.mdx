@@ -2,7 +2,7 @@
 title: 'ITFEST CTF 2025 PWN Writeups'
 description: 'Writeups on my PWN challenges in the ITFEST CTF 2025'
 date: 2025-12-12
-tags: ['itfest-ctf-2025', 'pwn', 'safe-unlinking', 'heap-exploitation', 'TOCTOU', 'race-condition', 'kernel-exploitation']
+tags: ['itfest-ctf-2025', 'pwn', 'unsafe-unlink', 'heap-exploitation', 'TOCTOU', 'race-condition', 'kernel-exploitation']
 authors: ['Aker']
 draft: false
 ---
@@ -439,10 +439,10 @@ edit(p, 1, payload) # 11 usage option, final RCE, will overwrite RIP with our RO
 p.interactive()
 ```
 
-## key takeaways
+## Key Takeaways
 
 - Understand binary behaviour
-- Identify vulnerability - Off by One in the heap
+- Identify vulnerability - Off By One in the heap
 - Bypass Unsafe Unlink security mitigations and perform Safe Unlink :)
 
 ## References
@@ -451,17 +451,17 @@ p.interactive()
 
 # 2. MAX MAX
 
-## description
+## Description
 
 TU TU TU TUTU
 
 ![](https://media1.tenor.com/m/7dSWeht-fxAAAAAd/du-du-du-du-du-du-du-du-max-verstappen.gif)
 
-## solution
+## Solution
 
-## flag
+## Flag
 
 `f13{}`
 
-## references
+## References
 
