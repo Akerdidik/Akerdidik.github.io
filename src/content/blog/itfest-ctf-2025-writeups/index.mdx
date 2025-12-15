@@ -243,7 +243,7 @@ We can execute it and check the memory around global_array, it should replace fi
 
 And yes we successfully gained arbitrary write on the global_array and we can now fake any address to point inside of this array, and then by choosing the ticket number we can edit, read the data within this pointers.
 
-### Explotiation Part 2: Arbitrary Read and RCE
+### Part 2: Arbitrary Read and RCE
 
 Now we have Arbitrary write on any address we provide inside of the global_array, which we control by editing the ticket (now it points to itself in ticket number 0, we can edit ticket and by the first entry we put our global_array address again, to persist the arbitary write primitive).
 
@@ -548,7 +548,7 @@ if (copy_from_user(kbuf, (void __user *)arg, 40)) // 3. writes to old pointer
 ```
 It proceeds to write user data to kbuf, but kbuf is now a dangling pointer referring to freed memory giving us - Use After Free primitive.
 
-### Exploitation: Race to Root via struct cred spray
+### Exploitation: UAF -> ROOT
 
 With the UAF primitive confirmed, the goal is to escalate privileges. Since we can write 40 bytes of arbitrary data to a freed object, we target the `struct cred`.
 The `struct cred` is the kernel structure that holds a process's privileges (UID, GID, capabilities, etc.). If we can overwrite a process's uid and gid fields with 0, that process becomes root.
@@ -687,8 +687,12 @@ int main() {
 ```
 
 ## Key Takeaways
-- 1
+
+- Understand driver
+- Identify vulnerability - TOCTOU to UAF
+- Escalate privileges using struct cred
 
 ## References
 
-- [TOCTOU in details](https://google.com)
+- [Similar TOCTOU challenge](https://p3land.smallkirby.com/kernel/uaf/)
+- [TOCTOU in details](https://natalieagus.github.io/50005/labs/02-toctou)
