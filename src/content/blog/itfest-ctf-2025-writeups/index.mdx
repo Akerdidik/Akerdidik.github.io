@@ -157,7 +157,7 @@ I created this template using the behaviour of the functions, as you can see cre
 
 Lets dive into Exploitation part and see what we can achieve with single byte overflow in this program.
 
-### Exploitation Part 1: Arbitrary Write
+### Part 1: Arbitrary Write
 
 Firstly lets check that bug exist dynamically, via executing the binary with our template and add the overflow part, it should overflow '1' chunk's size field:
 ```python
@@ -548,7 +548,7 @@ if (copy_from_user(kbuf, (void __user *)arg, 40)) // 3. writes to old pointer
 ```
 It proceeds to write user data to kbuf, but kbuf is now a dangling pointer referring to freed memory giving us - Use After Free primitive.
 
-### Exploitation: UAF -> ROOT
+### UAF -> root
 
 With the UAF primitive confirmed, the goal is to escalate privileges. Since we can write 40 bytes of arbitrary data to a freed object, we target the `struct cred`.
 The `struct cred` is the kernel structure that holds a process's privileges (UID, GID, capabilities, etc.). If we can overwrite a process's uid and gid fields with 0, that process becomes root.
