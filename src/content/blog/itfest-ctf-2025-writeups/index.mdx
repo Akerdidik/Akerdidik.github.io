@@ -63,7 +63,7 @@ By the usage of each functions it seems for doing:
 
 It is still not clear what it does actually when calling this options, specially the 1, 2, 3 and 4. So lets dive into reversing part, to analyze binary statically and dynamically.
 
-### Reverse
+### Reverse / Vulnerability
 
 Since I am a challenge author, I have the source code of the binary, but source code was not provided in the original task, so to be fair I will use original stripped binary as it is and reverse it.
 
@@ -157,7 +157,7 @@ I created this template using the behaviour of the functions, as you can see cre
 
 Lets dive into Exploitation part and see what we can achieve with single byte overflow in this program.
 
-### Exploitation Part 1
+### Exploitation Part 1: Gain Arbitrary Write and Arbitrary Read primitives via Safe Unlink
 
 Firstly lets check that bug exist dynamically, via executing the binary with our template and add the overflow part, it should overflow '1' chunk's size field:
 ```python
@@ -243,7 +243,7 @@ We can execute it and check the memory around global_array, it should replace fi
 
 And yes we successfully gained arbitrary write on the global_array and we can now fake any address to point inside of this array, and then by choosing the ticket number we can edit, read the data within this pointers.
 
-### Explotiation Part 2
+### Explotiation Part 2: Leak libc base and stack then gain RCE via ROP chain into stack
 
 Now we have Arbitrary write on any address we provide inside of the global_array, which we control by editing the ticket (now it points to itself in ticket number 0, we can edit ticket and by the first entry we put our global_array address again, to persist the arbitary write primitive).
 
@@ -524,6 +524,7 @@ There is also global object `global_obj` which contains a pointer to a buffer an
     2. Crucially, it performs an msleep(200), pausing execution for 200 milliseconds.
     3. After the sleep, it copies 40 bytes of data from user space into the location pointed to global_obj -> buffer.
 
+### Vulnerability
 Since in this driver ioctl does not protected via sync (mutex, spinlock) and not locked, there will be a Time of Check, Time of Use vulnerability (TOCTOU) that appears in the window between `CMD_ALLOC` and `CMD_WRITE`, the msleep function increases little bit this window creating us Race Condition which we can lead into full working Use After Free later.
 
 In CMD_WRITE, the driver creates a local copy of the buffer pointer:
@@ -546,6 +547,10 @@ When the CMD_WRITE thread wakes up:
 if (copy_from_user(kbuf, (void __user *)arg, 40)) // 3. writes to old pointer
 ```
 It proceeds to write user data to kbuf, but kbuf is now a dangling pointer referring to freed memory giving us - Use After Free primitive.
+
+### Exploitation: Race to Root via struct cred spray
+
+We need to abuse the Race to our profit, first is we need to choose a target to point to, this will be our victim object for later abuse UAF. In my solution i have used `task_struct`'s `cred_struct` which is basically the 
 
 ### Flag
 
