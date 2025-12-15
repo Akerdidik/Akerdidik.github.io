@@ -26,24 +26,24 @@ Old trick
 There is provided binary `old_rs` , `libc.so.6` and `ld-2.39.so` files.
 
 There is also provided meme.mp4 file inside of it there is fast phrase of: "Старый вокзалго мнау" meaning Old Railway Station :) (this is local meme created randomly, just rofl sound quality which makes laugh):
-![](https://github.com/Akerdidik/Akerdidik.github.io/src/context/blog/itfest-ctf-2025-writeups/meme.mp4)
+![](https://github.com/Akerdidik/Akerdidik.github.io/blob/main/src/content/blog/itfest-ctf-2025-writeups/meme.mp4)
 
 We can investigate `old_rs` by firstly using `checksec` to reveal security applied to this binary, also old_rs binary is stripped.
 
 And to check the version of libc provided, we can see the `ld-2.39.so` file giving us the according version, or we can check it by: `strings libc.so.6 | grep GLIBC` and identify it as GLIBC 2.39
 
 checksec:
-![](https://github.com/Akerdidik/Akerdidik.github.io/src/context/blog/itfest-ctf-2025-writeups/checksec.png)
+![](https://github.com/Akerdidik/Akerdidik.github.io/blob/main/src/content/blog/itfest-ctf-2025-writeups/checksec.png)
 
 GLIBC version:
-![](https://github.com/Akerdidik/Akerdidik.github.io/src/context/blog/itfest-ctf-2025-writeups/glibc_version.png)
+![](https://github.com/Akerdidik/Akerdidik.github.io/blob/main/src/content/blog/itfest-ctf-2025-writeups/glibc_version.png)
 
 So the binary is compiled with Full RELRO , Canary and NX enabled , No PIE
 
 Meaning the GOT and PLT sections are Read Only, and the binary contains canary check every stack frame it leaves and the stack is not executable, but binary do not have PIE enabled, which gives us constant known addresses of the binary itself.
 
 Lets investigate further by executing and checking what program does:
-![](https://github.com/Akerdidik/Akerdidik.github.io/src/context/blog/itfest-ctf-2025-writeups/binary_functions_execute.png)
+![](https://github.com/Akerdidik/Akerdidik.github.io/blob/main/src/content/blog/itfest-ctf-2025-writeups/binary_functions_execute.png)
 
 Binary prints the menu containing options:
 ```
@@ -55,7 +55,7 @@ Binary prints the menu containing options:
 ```
 
 By the usage of each functions it seems for doing:
-1. Creates ticket and prints the index of created ticket
+1. Creates ticket and asks for data for the ticket, then prints the index of created ticket
 2. We can modify ticket by index with our data
 3. Prints data within the ticket by index
 4. Refunds (Cancels) the ticket by index
@@ -70,9 +70,85 @@ Since I am a challenge author, I have the source code of the binary, but source 
 There can be used any reverse engineering tools you prefer. For this task I will use [Binary Ninja](https://binary.ninja) as decompilation tool and [pwndbg](https://github.com/pwndbg/pwndbg) for debugging.
 
 Lets check what functions we have in the binary using Binary Ninja:
-![](https://github.com/Akerdidik/Akerdidik.github.io/src/context/blog/itfest-ctf-2025-writeups/functions_bninja.png)
+![](https://github.com/Akerdidik/Akerdidik.github.io/blob/main/src/content/blog/itfest-ctf-2025-writeups/functions_bninja.png)
 
+Based on the main() function there is loop which prints the menu every iteration, then prompts input using scanf for integer, using that output it matches the calls for corresponding functions. Loop ends when we exceed the `i` variable which responds to the counter of the executed options in the program, meaning each option usage increments it until it reaches 0xd then loop ends.
 
+This part is optional, but I will rename the functions that was stripped to the corresponding names, based on the option menu print.
+
+The function `sub_401276` appears to be menu option which simply prints menu we saw earlier, so lets change it to that. `sub_4012ef` is function which is called when we choose option '1' so lets change it to `create_ticket`. Then there is `sub_4013d7` , `sub_4014e7` , `sub_4015ff` , `sub_401740` which is corresponding '2' , '3' , '4' , '5'. Lets change them into `edit_ticket` , `read_ticket` , `cancel_ticket` , `exit_prog`.
+
+Lets check what each functions do under the hood:
+![](https://github.com/Akerdidik/Akerdidik.github.io/blob/main/src/content/blog/itfest-ctf-2025-writeups/create_edit_ticket.png)
+![](https://github.com/Akerdidik/Akerdidik.github.io/blob/main/src/content/blog/itfest-ctf-2025-writeups/read_ticket.png)
+![](https://github.com/Akerdidik/Akerdidik.github.io/blob/main/src/content/blog/itfest-ctf-2025-writeups/cancel_exit.png)
+
+The `create_ticket` is eventually doing this:
+1. Checks some global variable (lets rename it to max_tickets) for not exceeding 2, if it is then returns with print of tickets is overbooked
+2. If the check passes, it creates chunk using `calloc(1, 0x418)`, meaning that unsorted chunks are used and calloc fills the returned buffer with zeros
+3. Stores chunk in the global chunks array (lets rename it to global_array) in the binary data section
+4. Asks for input exact 0x418 bytes that will be stored in the chunk's user data
+5. Prints the global ticket (max_tickets) number and increments it
+
+`edit_ticket`:
+1. Asks for ticket number to modify
+2. Checks ticket number for bigger than 0 and less or equal than global ticket number (max_tickets)
+3. If the check passes, then checks the ticket inside of global chunks array (global_array) for not 0, if it is then prints that ticket was already cancelled
+4. If the check passes, then it asks for input to modify the ticket data, we can write one byte more than 0x418, maximum write uo to 0x419 bytes in to the chunk
+
+`read_ticket`:
+1. Asks for ticket number to read
+2. Checks ticket number for bigger than 0 and less or equal than global ticket number (max_tickets)
+3. If the check passes, then checks the ticket inside of global chunks array (global_array) for not 0, if it is then prints that ticket was already cancelled
+4. If the check passes, then writes the content of the ticket to stdout
+
+`cancel_ticket`:
+1. Checks some global variable (lets call it, is_free_used) for 0, if it is not then prints that cancellation is limited 1 per day
+2. If the check passes, then asks for ticket number to cancel
+3. Checks ticket number for bigger than 0 and less or equal than global ticket number (max_tickets)
+4. If the check passes, then checks the ticket inside of global chunks array (global_array) for not 0, if it is then prints that ticket was already cancelled
+5. If the check passes then frees the chunk and zeros the ticket inside of global chunks array (global_array)
+6. Changes value of is_free_used to 1
+
+`exit_prog`:
+1. Prints that station is closed
+2. Exits from program
+
+That is almost everything we need to step further, the key things to mention that program allocates only unsorted bin chunks (0x418) meaning that no fastbin chunks are used, and size is high enough to not use tcache. And there is only 1 free usage per execution, meaning that we can only free once in the program (we can increase this limit later, but its not needed, we can pwn using only 1 free). Also there is global chunks array (global_array), that contains pointers to chunks in heap and can be accessed via corresponding ticket number in the program. We limited for option usage in 13 execution, as i mentioned for free usage it can be increased later, but we do not need to do that becasue 13 options is enough to pwn this program.
+
+For the bugs there is no Use after Free or Double free bugs, and usage of calloc() also zeros the chunks preventing us from potential heap/libc leaks using the uninitalized memory, there it will not leak anything using calloc. There is single byte overflow in the `edit_ticket` allowing us to overflow next chunk's size field.
+
+Now we can write some wrapper python pwntools code to be able to easily communicate with the binary options:
+```
+from pwn import *
+
+def malloc(p, data):
+        p.sendlineafter(b'> ', b'1')
+        p.sendafter(b': ', data)
+
+def edit(p, index, data):
+        p.sendlineafter(b'> ', b'2')
+        p.sendlineafter(b': ', str(index).encode())
+        p.sendafter(b': ', data)
+
+def view(p, index):
+        p.sendlineafter(b'> ', b'3')
+        p.sendlineafter(b': ', str(index).encode())
+
+def free(p, index):
+        p.sendlineafter(b'> ', b'4')
+        p.sendlineafter(b': ', str(index).encode())
+
+exe = ELF('./old_rs')
+libc = exe.libc
+context.binary = exe
+context.gdb_binary = 'pwndbg'
+context.terminal = ["tmux", "splitw", "-h"]
+
+p = gdb.debug([exe.path], '''continue''')
+
+p.interactive()
+```
 
 ## Flag
 
