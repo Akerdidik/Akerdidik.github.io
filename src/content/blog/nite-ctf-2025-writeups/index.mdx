@@ -157,7 +157,7 @@ p.sendafter(b'leave', b'a')
 
 ### Part 3: Musl and Exit handlers
 
-Now the most interesting part appears, in the default glibc there will be a lot more opportunity to reach the code execution, FSOP or printf arg table and etc, since its musl there are not a lot options here. We can try to perform ROP chain into stack which was my first idea to come up, but i gave up on that and tried to search something related in musl. Musl does not have onegadgets and the libc itself is Full RELRO which makes it more pain but not so much. I came up with reading how the exit_handlers in the musl works and found:
+Now the most interesting part appears, in the default glibc there will be a lot more opportunity to reach the code execution, since its musl there are not a lot options here. We can try to perform ROP chain into stack which was my first idea to come up, but i gave up on that and tried to search something related in musl. Musl does not have onegadgets and the libc itself is Full RELRO which makes it more pain but not so much. I came up with reading how the exit_handlers in the musl works and found:
 [atexit.c](https://github.com/esmil/musl/blob/master/src/exit/atexit.c)
 
 This not much going on, basically what we need is that there `__funcs_on_exit` checks the head and iterates through it, it gets the function pointer in that list and executes `func(arg1)`
