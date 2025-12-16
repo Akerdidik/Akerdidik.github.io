@@ -49,7 +49,9 @@ Also the libc is actually musl libc, we can verify it by executing the libc.so:
 The binary is already linked with libc provided, so we can execute and check what it does:
 ![](https://raw.githubusercontent.com/Akerdidik/Akerdidik.github.io/refs/heads/main/src/content/blog/nite-ctf-2025-writeups/initial.png)
 
-We can create character and specify the character by index, and also can specify the class for the character, then we can defeat the king. And we can leave the binary. To understand more precisely lets just open it in Binary Ninja and see what id does under the hood.
+We can create character and specify the character by index, and also can specify the class for the character, then we can defeat the king. And we can leave the binary.
+
+To understand more precisely lets just open it in Binary Ninja and see what id does under the hood.
 
 ### Reverse / Vulnerability
 
@@ -139,7 +141,9 @@ def arb_write(p, offset, target, data, rel):
 
 `prepare_64` is just crafting for us the needed chunks, and `arb_write` will send it to the action, also generating the payload using `fmtstr_payload` with no_dollars option.
 
-Now we also can easily leak stack, i was not able to easily leak the stack from directly printf, i will just overwrite the pointer of the `list` entry to libc.sym.environ and leak via action which prints it in %s . The offset for overwriting the data via printf is 8
+Now we also can easily leak stack, i was not able to easily leak the stack from directly printf, i will just overwrite the pointer of the `list` entry to libc.sym.environ and leak via action which prints it in %s
+
+The offset for overwriting the data via printf is 8
 ```python
 target = exe.sym.list + 16
 offset = 8
@@ -157,7 +161,13 @@ p.sendafter(b'leave', b'a')
 
 ### Part 3: Musl and Exit handlers
 
-Now the most interesting part appears, in the default glibc there will be a lot more opportunity to reach the code execution, since its musl there are not a lot options here. We can try to perform ROP chain into stack which was my first idea to come up, but i gave up on that and tried to search something related in musl. Musl does not have onegadgets and the libc itself is Full RELRO which makes it more pain but not so much. I came up with reading how the exit_handlers in the musl works and found:
+Now the most interesting part appears, in the default glibc there will be a lot more opportunity to reach the code execution, since its musl there are not a lot options here.
+
+We can try to perform ROP chain into stack which was my first idea to come up, but i gave up on that and tried to search something related in musl.
+
+Musl does not have onegadgets and the libc itself is Full RELRO which makes it more pain but not so much.
+
+I came up with reading how the exit_handlers in the musl works and found:
 [atexit.c](https://github.com/esmil/musl/blob/master/src/exit/atexit.c)
 
 This not much going on, basically what we need is that there `__funcs_on_exit` checks the head and iterates through it, it gets the function pointer in that list and executes `func(arg1)`
@@ -178,9 +188,15 @@ p.sendlineafter(b'>>', b'3')
 p.sendline(b'cat flag.txt')
 ```
 
-I placed my /bin/sh into the known position of my `list`, then i defined the struct_fl location in the libc, which can be retrieve (if symbols exported) by revealing the `head` symbol in the gdb. Then i write the pointer to my fake_fl structure into the libc struct_fl and then crafted needed positions for performing code execution by placing the function pointer to system and argument to the pointer i earlier write the /bin/sh to. And also we make sure to not corrupt this list and point the list fd to ourself
+I placed my /bin/sh into the known position of my `list`, then i defined the struct_fl location in the libc, which can be retrieve (if symbols exported) by revealing the `head` symbol in the gdb.
 
-Now after the exit the __funcs_on_exit will enumerate through our fake head structure and find needed function pointer and argument and execute it giving us a shell. Then we just read the flag.
+Then I write the pointer to my fake_fl structure into the libc struct_fl and then crafted needed positions for performing code execution by placing the function pointer to system and argument to the pointer I earlier write the /bin/sh to.
+
+And also we make sure to not corrupt this list and point the list fd to ourself
+
+Now during the exit the `__funcs_on_exit` will enumerate through our fake head structure and find needed function pointer and argument and execute it giving us a shell.
+
+Then we just read the flag.
 
 ### Full Exploit Script
 
@@ -413,4 +429,4 @@ p.interactive()
 
 # Aftermath
 
-During the ctf was not able to solved Virtual Rift and Nitebus challenges, first was to get leverage of OOB in the custom VM then you can either do arbitrary free or use that OOB to write and exploit heap via tcache poison and perform FSOP. Second was an arm rop challenge
+During the ctf I was not able to solve Virtual Rift and Nitebus challenges, first was to get leverage of OOB in the custom VM then you can either do arbitrary free or use that OOB to write and exploit heap via tcache poison and perform FSOP. Second was an arm rop challenge
